@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-/// @title KipuBank - A personal vault contract with deposit and withdrawal limits.
+/// @title KipuBankV2 - A personal vault contract with deposit and withdrawal limits.
 /// @author lletsica
 /// @notice Contract that allows users to deposit and withdraw native tokens (ETH) and USDC.
 contract KipuBankV2 {
@@ -66,10 +66,10 @@ contract KipuBankV2 {
         _;
     }
 
-    /// @notice Permite a los usuarios depositar tokens nativos (ETH) en su boveda personal.
-    /// @dev El deposito no puede ser cero y no puede exceder el limite global.
-    /// @custom:security Respeta el patron checks-effects-interactions.
-    /// @custom:event Emite un evento 'Deposit'.
+    /// @notice Allows users to deposit native tokens (ETH) into their personal vault.
+    /// @dev The deposit cannot be zero and cannot exceed the global limit.
+    /// @custom:security Uses checks-effects-interactions.
+    /// @custom:event Emits event 'Deposit'.
     function deposit() external payable nonZeroDeposit() {
         if (totalEth + msg.value > BANK_CAP) {
             revert DepositExceedsBankCap();
@@ -80,11 +80,11 @@ contract KipuBankV2 {
         emit Deposit(msg.sender, msg.value);
     }
 
-    /// @notice Permite a los usuarios retirar fondos de su boveda personal.
-    /// @dev El retiro no puede ser cero, no puede exceder el limite por transaccion y el usuario debe tener fondos suficientes.
-    /// @param _amount La cantidad de ETH a retirar en wei.
-    /// @custom:security Respeta el patron checks-effects-interactions y transfiere de forma segura.
-    /// @custom:event Emite un evento 'Withdrawal'.
+    /// @notice Allows users to withdraw funds from their personal vault.
+    /// @dev The withdrawal cannot be zero, cannot exceed the transaction limit, and the user must have sufficient funds.
+    /// @param _amount The amount of ETH to withdraw (wei).
+    /// @custom:security Uses checks-effects-interactions pattern and transfers safely.
+    /// @custom:event Emits event 'Withdrawal'.
     function withdraw(uint256 _amount) external nonZeroWithdrawal(_amount) {
         // Chequeos
         _validateWithdrawalLimits(_amount);
@@ -110,15 +110,15 @@ contract KipuBankV2 {
         }
     }
 
-    /// @notice Devuelve el saldo de ETH de un usuario.
-    /// @param _user La direccion del usuario.
-    /// @return El saldo de ETH del usuario.
+    /// @notice Returns a user's balance.
+    /// @param _user contains the user's address
+    /// @return  user's balance.
     function getUserBalance(address _user) external view returns (uint256) {
         return userBalances[_user];
     }
 
     /// @notice Devuelve el numero total de depositos realizados.
-    /// @return El conteo total de depositos.
+    /// @return deposit counter
     function getDepositCounter() public view returns (uint256) {
         return depositCounter;
     }
