@@ -74,9 +74,11 @@ contract KipuBankV2 {
         if (totalEth + msg.value > BANK_CAP) {
             revert DepositExceedsBankCap();
         }
-        userBalances[msg.sender] += msg.value;
-        totalEth += msg.value;
-        ++depositCounter;
+        unchecked{
+            userBalances[msg.sender] += msg.value;
+            totalEth += msg.value;
+            ++depositCounter;
+        }
         emit Deposit(msg.sender, msg.value);
     }
 
@@ -86,21 +88,20 @@ contract KipuBankV2 {
     /// @custom:security Uses checks-effects-interactions pattern and transfers safely.
     /// @custom:event Emits event 'Withdrawal'.
     function withdraw(uint256 _amount) external nonZeroWithdrawal(_amount) {
-        // Chequeos
         _validateWithdrawalLimits(_amount);
-        // Descuenta el saldo del user que quiere retirar
-        userBalances[msg.sender] -= _amount;
-        totalEth -= _amount; //resta del total del  contrato
-        ++withdrawalCounter;
-        // Interacciones
-        (bool sent,) = msg.sender.call{value: _amount}(""); //call no limita el gas
-        require(sent, "Failed to send Ether"); //verifica si fue exitoso
+        unchecked{        
+            userBalances[msg.sender] -= _amount;
+            totalEth -= _amount; 
+            ++withdrawalCounter;
+        }
+        (bool sent,) = msg.sender.call{value: _amount}(""); 
+        require(sent, "Failed to send Ether"); 
         emit Withdrawal(msg.sender, _amount);
     }
 
-    /// @dev Funcion privada, no accesible desde el exterior
-    /// @param _amount Monto del retiro
-    /// @notice Valida el limite a retirar
+    /// @dev Private function, not accessible from the outside
+    /// @param _amount Withdrawal amount
+    /// @notice Validate the withdrawal limit
     function _validateWithdrawalLimits(uint256 _amount) private view {
         if (_amount > MAX_WITHD_PER_TX) {
             revert WithdrawalExceedsLimit(MAX_WITHD_PER_TX);
@@ -117,7 +118,7 @@ contract KipuBankV2 {
         return userBalances[_user];
     }
 
-    /// @notice Devuelve el numero total de depositos realizados.
+    /// @notice Returns the total number of deposits made.
     /// @return deposit counter
     function getDepositCounter() public view returns (uint256) {
         return depositCounter;
