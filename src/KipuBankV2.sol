@@ -141,7 +141,7 @@ contract KipuBankV2 is AccessControl {
 
     /// @notice Deposits ETH into the user's vault.
     /// @dev Requires DEPOSITOR_ROLE and non-zero deposit.
-    function deposit() external payable nonZeroDeposit onlyRole(DEPOSITOR_ROLE) {
+    function depositEth() external payable nonZeroDeposit onlyRole(DEPOSITOR_ROLE) {
         if (totalEth + msg.value > BANK_CAP) revert DepositExceedsBankCap();
         unchecked {
             userBalances[msg.sender] += msg.value;
@@ -149,6 +149,20 @@ contract KipuBankV2 is AccessControl {
             ++depositCounter;
         }
         emit Deposit(msg.sender, msg.value);
+    }
+
+    /// @notice Deposits USDC into the user's vault.
+    /// @param amount The amount of USDC to deposit.
+    /// @dev Requires DEPOSITOR_ROLE and prior approval via ERC20 `approve`.
+    function depositUSDC(uint256 amount) external payable onlyRole(DEPOSITOR_ROLE) {
+        if (amount == 0) revert DepositAmountZero();
+        bool success = usdcToken.transferFrom(msg.sender, address(this), amount);
+        require(success, "USDC transfer failed");
+        unchecked {
+            userUsdcBalances[msg.sender] += amount;
+            ++depositCounter;
+        }
+        emit Deposit(msg.sender, amount);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -202,20 +216,6 @@ contract KipuBankV2 is AccessControl {
         (bool sent, ) = msg.sender.call{value: _amount}("");
         require(sent, "Failed to send Ether");
         emit Withdrawal(msg.sender, _amount);
-    }
-
-    /// @notice Deposits USDC into the user's vault.
-    /// @param amount The amount of USDC to deposit.
-    /// @dev Requires DEPOSITOR_ROLE and prior approval via ERC20 `approve`.
-    function depositUSDC(uint256 amount) external onlyRole(DEPOSITOR_ROLE) {
-        if (amount == 0) revert DepositAmountZero();
-        bool success = usdcToken.transferFrom(msg.sender, address(this), amount);
-        require(success, "USDC transfer failed");
-        unchecked {
-            userUsdcBalances[msg.sender] += amount;
-            ++depositCounter;
-        }
-        emit Deposit(msg.sender, amount);
     }
 
     /// @notice Withdraws USDC from the user's vault.
