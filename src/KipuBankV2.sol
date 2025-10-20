@@ -1,64 +1,68 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-/// @title KipuBankV2 - A personal vault contract with deposit and withdrawal limits.
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+
+/// @title KipuBankV2 - A personal vault contract with deposit and withdrawal limits, role-based access, and Chainlink price feed integration.
 /// @author lletsica
-/// @notice Contract that allows users to deposit and withdraw native tokens (ETH) and USDC.
-contract KipuBankV2 {
-    /// @notice Total global limit of deposits that the contract may contain.
+/// @notice This contract allows users to deposit and withdraw ETH and USDC, with access controlled via roles and KYC-based whitelisting. It also provides real-time ETH/USD pricing via Chainlink.
+contract KipuBankV2 is AccessControl {
+    bytes32 public constant DEPOSITOR_ROLE = keccak256("DEPOSITOR_ROLE");
+    bytes32 public constant WITHDRAWER_ROLE = keccak256("WITHDRAWER_ROLE");
+
+    IERC20 public usdcToken;
+    AggregatorV3Interface internal priceFeed;
+
+    mapping(address => uint256) public userUsdcBalances;
+    mapping(address => bool) public whitelist;
     uint256 public immutable BANK_CAP;
-    /// @notice Maximum amount of ETH that can be withdrawn in a single transaction.
     uint256 public immutable MAX_WITHD_PER_TX;
-    
-    /// @notice The total balance of ETH deposited into the contract.
     uint256 public totalEth;
-    /// @notice Successful withdrawal counter.
     uint256 public withdrawalCounter;
-    /// @notice Successful deposit counter.
     uint256 private depositCounter;
-    
-    /// @notice Mapping addresses with their balance.
     mapping(address => uint256) public userBalances;
-    
-    /// @dev Event Deposit: it is emitted when a user successfully deposits funds.
-    /// @param user: The address of the user who made the deposit.
-    /// @param amount: The amount of ETH deposited.
+
     event Deposit(address indexed user, uint256 amount);
-
-    /// @dev Event Withdrawal: it is emitted when a user successfully withdraws funds.
-    /// @param user The address of the user who made the withdrawal.
-    /// @param amount is the amount of ETH withdrawn.
     event Withdrawal(address indexed user, uint256 amount);
+    event Whitelisted(address indexed user);
+    event RemovedFromWhitelist(address indexed user);
 
-    /// @dev Error that is thrown when the deposit amount is zero.
     error DepositAmountZero();
-    /// @dev Error that is thrown when the withdrawal amount is zero.
     error WithdrawalAmountZero();
-    /// @dev Error that is thrown when the deposit exceeds the bank's global limit.
     error DepositExceedsBankCap();
-    /// @dev Error that is thrown when the balance is insufficient.
     error InsufficientUserBalance();
-    /// @dev Error that is thrown when the withdrawal amount exceeds the transaction limit.
     error WithdrawalExceedsLimit(uint256 maxWithdrawal);
 
-    /// @dev Constructor to initialize the contract.
-    /// @param _bankCap The overall deposit limit (wei).
-    /// @param _maxWithdrawalPerTx The withdrawal limit per transaction (wei).
-    constructor(uint256 _bankCap, uint256 _maxWithdrawalPerTx) {
+    /// @notice Initializes the contract and assigns initial roles.
+    /// @param _bankCap The maximum ETH the contract can hold.
+    /// @param _maxWithdrawalPerTx The maximum ETH withdrawal per transaction.
+    /// @param _usdcAddress The address of the USDC token contract.
+    /// @param _priceFeedAddress The address of the Chainlink ETH/USD price feed.
+    constructor(
+        uint256 _bankCap,
+        uint256 _maxWithdrawalPerTx,
+        address _usdcAddress,
+        address _priceFeedAddress
+    ) {
         BANK_CAP = _bankCap;
         MAX_WITHD_PER_TX = _maxWithdrawalPerTx;
+        usdcToken = IERC20(_usdcAddress);
+        priceFeed = AggregatorV3Interface(_priceFeedAddress);
+
+        _grantRole(DEPOSITOR_ROLE, msg.sender);
+        _grantRole(WITHDRAWER_ROLE, msg.sender);
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
 
-    /// @dev Modifier to validate that the WITHDRAWAL amount is not zero.
-    /// @param _amount is the withdrawal amount
     modifier nonZeroWithdrawal(uint256 _amount) {
         if (_amount == 0) {
             revert WithdrawalAmountZero();
         }
         _;
     }
-    
-    /// @dev Modifier to validate that the DEPOSIT amount is not zero.
+
     modifier nonZeroDeposit() {
         if (msg.value == 0) {
             revert DepositAmountZero();
@@ -66,15 +70,13 @@ contract KipuBankV2 {
         _;
     }
 
-    /// @notice Allows users to deposit native tokens (ETH) into their personal vault.
-    /// @dev The deposit cannot be zero and cannot exceed the global limit.
-    /// @custom:security Uses checks-effects-interactions.
-    /// @custom:event Emits event 'Deposit'.
-    function deposit() external payable nonZeroDeposit() {
+    /// @notice Deposits ETH into the user's vault.
+    /// @dev Requires DEPOSITOR_ROLE and non-zero deposit.
+    function deposit() external payable nonZeroDeposit onlyRole(DEPOSITOR_ROLE) {
         if (totalEth + msg.value > BANK_CAP) {
             revert DepositExceedsBankCap();
         }
-        unchecked{
+        unchecked {
             userBalances[msg.sender] += msg.value;
             totalEth += msg.value;
             ++depositCounter;
@@ -82,26 +84,86 @@ contract KipuBankV2 {
         emit Deposit(msg.sender, msg.value);
     }
 
-    /// @notice Allows users to withdraw funds from their personal vault.
-    /// @dev The withdrawal cannot be zero, cannot exceed the transaction limit, and the user must have sufficient funds.
-    /// @param _amount The amount of ETH to withdraw (wei).
-    /// @custom:security Uses checks-effects-interactions pattern and transfers safely.
-    /// @custom:event Emits event 'Withdrawal'.
-    function withdraw(uint256 _amount) external nonZeroWithdrawal(_amount) {
+    /// @notice Withdraws ETH from the user's vault.
+    /// @param _amount The amount of ETH to withdraw.
+    /// @dev Requires WITHDRAWER_ROLE and sufficient balance.
+    function withdraw(uint256 _amount) external nonZeroWithdrawal(_amount) onlyRole(WITHDRAWER_ROLE) {
         _validateWithdrawalLimits(_amount);
-        unchecked{        
+        unchecked {
             userBalances[msg.sender] -= _amount;
-            totalEth -= _amount; 
+            totalEth -= _amount;
             ++withdrawalCounter;
         }
-        (bool sent,) = msg.sender.call{value: _amount}(""); 
-        require(sent, "Failed to send Ether"); 
+        (bool sent, ) = msg.sender.call{value: _amount}("");
+        require(sent, "Failed to send Ether");
         emit Withdrawal(msg.sender, _amount);
     }
 
-    /// @dev Private function, not accessible from the outside
-    /// @param _amount Withdrawal amount
-    /// @notice Validate the withdrawal limit
+    /// @notice Deposits USDC into the user's vault.
+    /// @param amount The amount of USDC to deposit.
+    /// @dev Requires DEPOSITOR_ROLE and prior approval via ERC20 `approve`.
+    function depositUSDC(uint256 amount) external onlyRole(DEPOSITOR_ROLE) {
+        if (amount == 0) revert DepositAmountZero();
+        bool success = usdcToken.transferFrom(msg.sender, address(this), amount);
+        require(success, "USDC transfer failed");
+        unchecked {
+            userUsdcBalances[msg.sender] += amount;
+            ++depositCounter;
+        }
+        emit Deposit(msg.sender, amount);
+    }
+
+    /// @notice Withdraws USDC from the user's vault.
+    /// @param amount The amount of USDC to withdraw.
+    /// @dev Requires WITHDRAWER_ROLE and sufficient balance.
+    function withdrawUSDC(uint256 amount) external onlyRole(WITHDRAWER_ROLE) {
+        if (amount == 0) revert WithdrawalAmountZero();
+        if (amount > userUsdcBalances[msg.sender]) revert InsufficientUserBalance();
+        unchecked {
+            userUsdcBalances[msg.sender] -= amount;
+            ++withdrawalCounter;
+        }
+        bool success = usdcToken.transfer(msg.sender, amount);
+        require(success, "USDC withdrawal failed");
+        emit Withdrawal(msg.sender, amount);
+    }
+
+    /// @notice Adds a user to the whitelist and grants deposit/withdraw roles.
+    /// @param user The address to whitelist.
+    /// @dev Only callable by admin. Used after KYC approval.
+    function addToWhitelist(address user) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(user != address(0), "Invalid address");
+        require(!whitelist[user], "Already whitelisted");
+        whitelist[user] = true;
+        _grantRole(DEPOSITOR_ROLE, user);
+        _grantRole(WITHDRAWER_ROLE, user);
+        emit Whitelisted(user);
+    }
+
+    /// @notice Removes a user from the whitelist and revokes roles.
+    /// @param user The address to remove.
+    /// @dev Only callable by admin. Used for KYC revocation or bans.
+    function removeFromWhitelist(address user) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(user != address(0), "Invalid address");
+        require(whitelist[user], "User not whitelisted");
+        whitelist[user] = false;
+        if (hasRole(DEPOSITOR_ROLE, user)) {
+            _revokeRole(DEPOSITOR_ROLE, user);
+        }
+        if (hasRole(WITHDRAWER_ROLE, user)) {
+            _revokeRole(WITHDRAWER_ROLE, user);
+        }
+        emit RemovedFromWhitelist(user);
+    }
+
+    /// @notice Returns the latest ETH/USD price from Chainlink.
+    /// @return ethPrice The current price of 1 ETH in USD (8 decimals).
+    function getLatestEthPrice() public view returns (int ethPrice) {
+        (, ethPrice, , , ) = priceFeed.latestRoundData();
+    }
+
+    /// @dev Validates ETH withdrawal limits and user balance.
+    /// @param _amount The amount to validate.
     function _validateWithdrawalLimits(uint256 _amount) private view {
         if (_amount > MAX_WITHD_PER_TX) {
             revert WithdrawalExceedsLimit(MAX_WITHD_PER_TX);
@@ -111,15 +173,15 @@ contract KipuBankV2 {
         }
     }
 
-    /// @notice Returns a user's balance.
-    /// @param _user contains the user's address
-    /// @return  user's balance.
+    /// @notice Returns the ETH balance of a user.
+    /// @param _user The address to query.
+    /// @return The ETH balance of the user.
     function getUserBalance(address _user) external view returns (uint256) {
         return userBalances[_user];
     }
 
     /// @notice Returns the total number of deposits made.
-    /// @return deposit counter
+    /// @return The deposit counter value.
     function getDepositCounter() public view returns (uint256) {
         return depositCounter;
     }
