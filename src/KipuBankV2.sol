@@ -154,7 +154,7 @@ contract KipuBankV2 is AccessControl {
     /// @notice Deposits USDC into the user's vault.
     /// @param amount The amount of USDC to deposit.
     /// @dev Requires DEPOSITOR_ROLE and prior approval via ERC20 `approve`.
-    function depositUSDC(uint256 amount) external payable onlyRole(DEPOSITOR_ROLE) {
+    function depositUSDC(uint256 amount) external onlyRole(DEPOSITOR_ROLE) {
         if (amount == 0) revert DepositAmountZero();
         bool success = usdcToken.transferFrom(msg.sender, address(this), amount);
         require(success, "USDC transfer failed");
