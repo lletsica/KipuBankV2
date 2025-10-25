@@ -34,4 +34,24 @@ Steps
 - Use getUserTotalUsd(address) to view USD-equivalent balances
 - Admins can pause(), unpause(), or emergencyWithdraw(token, amount, to)
 
+**Design Notes & Trade-offs**
+Security & Auditability
+- Uses OpenZeppelin standards for access control, pausing, and reentrancy
+- Custom errors improve gas efficiency and clarity
+- NatSpec documentation supports audit-readiness and onboarding
+USD-Based Logic
+- ETH and USDC are normalized to USD * 1e8 for unified accounting
+- Trade-off: requires Chainlink feed availability and trust
+Modularity
+- Roles and whitelist allow flexible permissioning
+- Trade-off: more complexity in deployment and testing
+Limits & Safeguards
+- Deposit caps and per-tx withdrawal limits prevent abuse
+- Emergency withdrawal ensures recoverability
+- Trade-off: requires careful configuration and admin discipline
+UX vs. Control
+- Users must be whitelisted before interacting
+- Trade-off: adds friction but enables compliance and gated acces
+
+
 
