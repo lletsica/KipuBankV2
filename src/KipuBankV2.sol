@@ -341,3 +341,4 @@ contract KipuBankV2 is AccessControl, ReentrancyGuard, Pausable {
 			revert InsufficientUserBalance();
 		}
 	}
+}
