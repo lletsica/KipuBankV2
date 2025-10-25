@@ -248,36 +248,36 @@ contract KipuBankV2 is AccessControl, ReentrancyGuard, Pausable {
 
 	/// @notice Allows a whitelisted user to deposit USDC into the bank
 	/// @dev Transfers USDC from sender and updates internal balance and counters
-	/// @param amount Amount of USDC to deposit (in token units)
-	function depositUSDC(uint256 amount)
+	/// @param _amount Amount of USDC to deposit (in token units)
+	function depositUSDC(uint256 _amount)
 		external
 		whenNotPaused
 		onlyRole(DEPOSITOR_ROLE)
 		onlyWhitelisted(msg.sender)
-		nonZero(amount)
+		nonZero(_amount)
 	{
-		usdcToken.transferFrom(msg.sender, address(this), amount);
+		usdcToken.transferFrom(msg.sender, address(this), _amount);
 		unchecked {
-			userUsdcBalances[msg.sender] += amount;
+			userUsdcBalances[msg.sender] += _amount;
 			++depositCounter;
 		}
-		emit DepositUsdc(msg.sender, amount);
+		emit DepositUsdc(msg.sender, _amount);
 	}
 
 	/// @notice Adds a user to the whitelist, enabling deposits and withdrawals
 	/// @dev Only callable by admin
-	/// @param user Address to be whitelisted
-	function addToWhitelist(address user) external onlyRole(DEFAULT_ADMIN_ROLE) {
-		whitelist[user] = true;
-		emit Whitelisted(user);
+	/// @param _user Address to be whitelisted
+	function addToWhitelist(address _user) external onlyRole(DEFAULT_ADMIN_ROLE) {
+		whitelist[_user] = true;
+		emit Whitelisted(_user);
 	}
 
 	/// @notice Removes a user from the whitelist, disabling deposits and withdrawals
 	/// @dev Only callable by admin
-	/// @param user Address to be removed from whitelist
-	function removeFromWhitelist(address user) external onlyRole(DEFAULT_ADMIN_ROLE) {
-		whitelist[user] = false;
-		emit RemovedFromWhitelist(user);
+	/// @param _user Address to be removed from whitelist
+	function removeFromWhitelist(address _user) external onlyRole(DEFAULT_ADMIN_ROLE) {
+		whitelist[_user] = false;
+		emit RemovedFromWhitelist(_user);
 	}
 
 	/// @notice Pauses all deposit and withdrawal operations
