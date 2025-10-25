@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity >0.8.20;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
 
 /// @title KipuBankV2
 /// @author lletsica
 /// @notice A personal vault contract that supports ETH and USDC deposits/withdrawals with role-based access control and Chainlink price feed integration.
 /// @dev Uses OpenZeppelin's AccessControl and Chainlink's AggregatorV3Interface for secure role management and real-time ETH/USD pricing.
-contract KipuBankV2 is AccessControl {
+contract KipuBankV2 is AccessControl, ReentrancyGuard, Pausable {
     // ─────────────────────────────────────────────────────────────
     // Immutable / Constant Variables
     // ─────────────────────────────────────────────────────────────
@@ -66,13 +68,16 @@ contract KipuBankV2 is AccessControl {
     event Deposit(address indexed user, uint256 amount);
 
     /// @notice Emitted when a user successfully withdraws ETH or USDC.
-    event Withdrawal(address indexed user, uint256 amount);
+    event Withdrawal(address indexed user, address indexed token, uint256 amount);
 
     /// @notice Emitted when a user is added to the whitelist.
     event Whitelisted(address indexed user);
 
     /// @notice Emitted when a user is removed from the whitelist.
     event RemovedFromWhitelist(address indexed user);
+
+    /// @notice Emitted when administrator makes an emergency withdrawal
+    event EmergencyWithdrawal(address indexed admin, address indexed token, uint256 amount);
 
     // ─────────────────────────────────────────────────────────────
     // Custom Errors
@@ -92,6 +97,8 @@ contract KipuBankV2 is AccessControl {
 
     /// @dev Thrown when a withdrawal exceeds the per-transaction limit.
     error WithdrawalExceedsLimit(uint256 maxWithdrawal);
+
+    error NotWhitelisted(address user);
 
     // ─────────────────────────────────────────────────────────────
     // Constructor
@@ -130,8 +137,13 @@ contract KipuBankV2 is AccessControl {
     }
 
     /// @dev Ensures the ETH deposit amount is not zero.
-    modifier nonZeroDeposit() {
-        if (msg.value == 0) revert DepositAmountZero();
+    modifier nonZero(uint256 _amount) {
+        if (_amount == 0) revert DepositAmountZero();
+        _;
+    }
+
+    modifier onlyWhitelisted(address _user) {
+        if (!whitelist[_user]) revert NotWhitelisted(_user);
         _;
     }
 
@@ -141,7 +153,7 @@ contract KipuBankV2 is AccessControl {
 
     /// @notice Deposits ETH into the user's vault.
     /// @dev Requires DEPOSITOR_ROLE and non-zero deposit.
-    function depositEth() external payable nonZeroDeposit onlyRole(DEPOSITOR_ROLE) {
+    function depositEth() external payable whenNotPaused onlyRole(DEPOSITOR_ROLE) onlyWhitelisted(msg.sender) nonZero(msg.value){
         if (totalEth + msg.value > BANK_CAP) revert DepositExceedsBankCap();
         unchecked {
             userBalances[msg.sender] += msg.value;
@@ -154,7 +166,7 @@ contract KipuBankV2 is AccessControl {
     /// @notice Deposits USDC into the user's vault.
     /// @param amount The amount of USDC to deposit.
     /// @dev Requires DEPOSITOR_ROLE and prior approval via ERC20 `approve`.
-    function depositUSDC(uint256 amount) external onlyRole(DEPOSITOR_ROLE) {
+    function depositUSDC(uint256 amount) external whenNotPaused onlyRole(DEPOSITOR_ROLE) onlyWhitelisted(msg.sender) nonZero(amount) {
         if (amount == 0) revert DepositAmountZero();
         bool success = usdcToken.transferFrom(msg.sender, address(this), amount);
         require(success, "USDC transfer failed");
@@ -166,26 +178,8 @@ contract KipuBankV2 is AccessControl {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Private Functions
-    // ─────────────────────────────────────────────────────────────
-
-    /// @dev Validates ETH withdrawal limits and user balance.
-    /// @param _amount The amount to validate.
-    function _validateWithdrawalLimits(uint256 _amount) private view {
-        if (_amount > MAX_WITHD_PER_TX) revert WithdrawalExceedsLimit(MAX_WITHD_PER_TX);
-        if (_amount > userBalances[msg.sender]) revert InsufficientUserBalance();
-    }
-
-    // ─────────────────────────────────────────────────────────────
     // External View Functions
     // ─────────────────────────────────────────────────────────────
-
-    /// @notice Returns the ETH balance of a user.
-    /// @param _user The address to query.
-    /// @return The ETH balance of the user.
-    function getUserBalance(address _user) external view returns (uint256) {
-        return userBalances[_user];
-    }
 
     /// @notice Returns the total number of deposits made.
     /// @return The deposit counter value.
@@ -193,11 +187,22 @@ contract KipuBankV2 is AccessControl {
         return depositCounter;
     }
 
-    /// @notice Returns the latest ETH/USD price from Chainlink.
-    /// @return ethPrice The current price of 1 ETH in USD (8 decimals).
-    function getLatestEthPrice() public view returns (int ethPrice) {
-        (, ethPrice, , , ) = priceFeed.latestRoundData();
+    /// @notice Retrieve a user's ETH balance held in the vault.
+    /// @dev Reads the internal mapping that tracks ETH balances in wei.
+    /// @param user The address whose ETH balance will be returned.
+    /// @return balance The user's ETH balance in wei.
+    function getUserEthBalance(address user) external view returns (uint256) {
+        return userBalances[user];
     }
+
+/// @notice Retrieve a user's USDC token balance held in the vault.
+/// @dev Reads the internal mapping that tracks USDC balances in token units.
+///      Callers should consider the USDC token's decimals when presenting this value.
+/// @param user The address whose USDC balance will be returned.
+/// @return balance The user's USDC balance in token units.
+function getUserUsdcBalance(address user) external view returns (uint256) {
+    return userUsdcBalances[user];
+}
 
     // ─────────────────────────────────────────────────────────────
     // Additional External Functions
@@ -206,30 +211,149 @@ contract KipuBankV2 is AccessControl {
     /// @notice Withdraws ETH from the user's vault.
     /// @param _amount The amount of ETH to withdraw.
     /// @dev Requires WITHDRAWER_ROLE and sufficient balance.
-    function withdrawEth(uint256 _amount) external nonZeroWithdrawal(_amount) onlyRole(WITHDRAWER_ROLE) {
-        _validateWithdrawalLimits(_amount);
+    function withdrawEth(uint256 _amount) external nonZeroWithdrawal(_amount) whenNotPaused nonReentrant onlyRole(WITHDRAWER_ROLE) onlyWhitelisted(msg.sender) {
+        _validateEthWithdrawal(msg.sender, _amount);
+
         unchecked {
             userBalances[msg.sender] -= _amount;
             totalEth -= _amount;
             ++withdrawalCounter;
         }
+
         (bool sent, ) = msg.sender.call{value: _amount}("");
-        require(sent, "Failed to send Ether");
-        emit Withdrawal(msg.sender, _amount);
+        require(sent, "ETH transfer failed");
+        emit Withdrawal(msg.sender, address(0), _amount);
     }
 
     /// @notice Withdraws USDC from the user's vault.
     /// @param amount The amount of USDC to withdraw.
     /// @dev Requires WITHDRAWER_ROLE and sufficient balance.
-    function withdrawUSDC(uint256 amount) external onlyRole(WITHDRAWER_ROLE) {
-        if (amount == 0) revert WithdrawalAmountZero();
+    function withdrawUSDC(uint256 amount) external whenNotPaused nonReentrant onlyRole(WITHDRAWER_ROLE) onlyWhitelisted(msg.sender) nonZeroWithdrawal(amount) {
         if (amount > userUsdcBalances[msg.sender]) revert InsufficientUserBalance();
+
         unchecked {
             userUsdcBalances[msg.sender] -= amount;
             ++withdrawalCounter;
         }
-        bool success = usdcToken.transfer(msg.sender, amount);
-        require(success, "USDC withdrawal failed");
-        emit Withdrawal(msg.sender, amount);
+
+        usdcToken.transfer(msg.sender, amount);
+        emit Withdrawal(msg.sender, address(usdcToken), amount);
     }
+
+    /// @notice Add an address to the contract whitelist allowing KYC-verified actions.
+    /// @dev Callable only by accounts with DEFAULT_ADMIN_ROLE. Sets `whitelist[user]` to true
+    ///      and emits a Whitelisted event. Use this to grant on-chain permission tied to KYC
+    ///      or other off-chain verification. Consider off-chain auditing of admin actions
+    ///      and governance (multisig) for production deployments.
+    /// @param user The address to add to the whitelist.
+    /// @custom:role DEFAULT_ADMIN_ROLE
+    /// @custom:emits Whitelisted
+    function addToWhitelist(address user) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        whitelist[user] = true;
+        emit Whitelisted(user);
+    }
+
+    /// @notice Remove an address from the contract whitelist, revoking KYC-verified actions.
+    /// @dev Callable only by accounts with DEFAULT_ADMIN_ROLE. Sets `whitelist[user]` to false
+    ///      and emits a RemovedFromWhitelist event. Removal should be logged and governed
+    ///      appropriately since it affects users' ability to interact with protected flows.
+    /// @param user The address to remove from the whitelist.
+    /// @custom:role DEFAULT_ADMIN_ROLE
+    /// @custom:emits RemovedFromWhitelist
+    function removeFromWhitelist(address user) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        whitelist[user] = false;
+        emit RemovedFromWhitelist(user);
+    }
+
+
+    /// @notice Pause contract operations protected by whenNotPaused.
+    /// @dev Callable only by accounts with DEFAULT_ADMIN_ROLE. Uses OpenZeppelin
+    ///      Pausable to block state-changing functions guarded by whenNotPaused.
+    /// @custom:role DEFAULT_ADMIN_ROLE
+    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _pause();
+    }
+
+    /// @notice Resume contract operations previously paused.
+    /// @dev Callable only by accounts with DEFAULT_ADMIN_ROLE. Uses OpenZeppelin
+    ///      Pausable to re-enable functions guarded by whenNotPaused.
+    /// @custom:role DEFAULT_ADMIN_ROLE
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
+    }
+
+    /// @notice Emergency withdrawal allowing admin to recover ETH or ERC20 tokens.
+    /// @dev Callable only by accounts with DEFAULT_ADMIN_ROLE. This function is nonReentrant
+    ///      and intended only for emergency fund recovery or contract migration;
+    ///      governance should restrict access (e.g., multisig).
+    /// @param token The token contract address to withdraw; use address(0) for ETH.
+    /// @param amount The amount to withdraw; if token is ETH and amount is 0 the full
+    ///               contract ETH balance will be sent; for ERC20 tokens amount must
+    ///               be the token units to transfer.
+    /// @param to The destination address receiving withdrawn funds; must not be zero.
+    /// @custom:role DEFAULT_ADMIN_ROLE
+    /// @custom:reverts Reverts if `to` is the zero address.
+    /// @custom:reverts Reverts if ETH transfer fails when sending ETH.
+    /// @custom:emits EmergencyWithdrawal
+    function emergencyWithdraw(address token, uint256 amount, address to) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        require(to != address(0), "Invalid recipient");
+        if (token == address(0)) {
+            uint256 bal = address(this).balance;
+            uint256 amt = amount == 0 ? bal : amount;
+            (bool sent, ) = to.call{value: amt}("");
+            require(sent, "ETH emergency transfer failed");
+            emit EmergencyWithdrawal(msg.sender, address(0), amt);
+            return;
+        }
+        IERC20(token).transfer(to, amount);
+        emit EmergencyWithdrawal(msg.sender, token, amount);
+    }
+
+/// @notice Get the latest ETH price in USD from the configured Chainlink feed.
+/// @dev Reads latestRoundData() and returns the price as an unsigned integer.
+///      Chainlink standard for ETH/USD uses 8 decimals so the returned value is
+///      USD * 1e8. Reverts if the oracle returns a non-positive price.
+/// @return price The latest ETH price in USD with 8 decimals (USD * 1e8).
+function getLatestEthPrice() public view returns (uint256) {
+    (, int256 price, , , ) = priceFeed.latestRoundData();
+    require(price > 0, "Invalid price");
+    return uint256(price);
+}
+
+/// @notice Convert an amount of ETH denominated in wei to USD using the Chainlink price feed.
+/// @dev Uses getLatestEthPrice() which returns price with 8 decimals. Calculation:
+///      (weiAmount * price) / 1e18 => result has 8 decimals (USD * 1e8).
+///      This preserves Chainlink's 8-decimal convention; callers should account for that
+///      when displaying or comparing values. No rounding beyond Solidity integer math is applied.
+/// @param weiAmount Amount of ETH in wei to convert.
+/// @return usdAmount USD value corresponding to weiAmount, expressed with 8 decimals (USD * 1e8).
+function ethWeiToUsd(uint256 weiAmount) public view returns (uint256) {
+    uint256 ethPrice = getLatestEthPrice(); // price has 8 decimals
+    // (weiAmount * price) / 1e18 => result has 8 decimals
+    return (weiAmount * ethPrice) / 1e18;
+}
+
+    /// @notice Reject plain ETH transfers; instruct callers to use depositEth instead.
+    /// @dev The receive function rejects direct ETH transfers to prevent accidental
+    ///      deposits and to ensure deposits go through depositEth which enforces
+    ///      role checks, KYC and accounting.
+    /// @custom:reverts Always reverts with message "Use depositEth".
+    receive() external payable {
+        revert("Use depositEth");
+    }
+
+    /// @notice Reject all unknown calls and plain ETH sent to non-existent functions.
+    /// @dev The fallback function reverts to avoid executing unexpected calldata,
+    ///      prevent accidental gas consumption, and ensure only supported entrypoints
+    ///      are used. It reverts with "Unsupported" for clarity.
+    /// @custom:reverts Always reverts with message "Unsupported".
+    fallback() external payable {
+        revert("Unsupported");
+    }
+
+    function _validateEthWithdrawal(address user, uint256 _amount) private view {
+        if (_amount > MAX_WITHD_PER_TX) revert WithdrawalExceedsLimit(MAX_WITHD_PER_TX);
+        if (_amount > userBalances[user]) revert InsufficientUserBalance();
+    }
+
 }
