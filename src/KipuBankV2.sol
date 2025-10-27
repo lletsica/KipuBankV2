@@ -300,7 +300,7 @@ contract KipuBankV2 is AccessControl, ReentrancyGuard, Pausable {
 		if (_amount == 0) revert DepositAmountZero();
 		IERC20 token = usdcToken; // cache
 		bool _ok = token.transferFrom(msg.sender, address(this), _amount);
-		require(_ok, "Transfer failed");
+		require(_ok, TransferFailed());
 		unchecked {
 			userUsdcBalances[msg.sender] += _amount;
 		}
@@ -335,7 +335,7 @@ contract KipuBankV2 is AccessControl, ReentrancyGuard, Pausable {
 		}
 		withdrawalCounter++;
 		(bool sent, ) = msg.sender.call{value: _amount}("");
-		require(sent, "ETH transfer failed");
+		require(sent, EthTransferFailed());
 		emit Withdrawal(msg.sender, address(0), _amount);
     }
 
@@ -364,7 +364,7 @@ contract KipuBankV2 is AccessControl, ReentrancyGuard, Pausable {
 		}
 		withdrawalCounter++;
 		bool _ok = _token.transfer(msg.sender, _amount);
-		require(_ok, "Transfer failed");
+		require(_ok, TransferFailed());
 		emit Withdrawal(msg.sender, address(_token), _amount);
 	}
 
