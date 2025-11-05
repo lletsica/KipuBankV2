@@ -1,0 +1,16 @@
+CMCristian Marchese - dom., 26 de oct. de 2025, 22:25
+Corrección 1:
+- Mejor la estructura del contrato. Ya no mezcla las variables, sin embargo default y receive no están en el orden correcto.
+- Aún tu natspec está incompleto y esto ya fue corregido en el TP anterior.
+- Cuidado que ++depositCounter; => si puede ser desbordada por lo queno debió ir en un unchecked.
+- Usa requires con string cuando debe usar custom errores sin strings.
+- Tienes multiples accesos a variables de estado como userUsdcBalances, (y no es la unica) recuerda que esto es un error grave.
+- tienes parte de codigo repetida como por ejemplo en ambos withdraw.
+Lamentablemente no corrige todas las cosas que corregí en el TP anterior y además tiene errores graves en el TP nuevo por lo que dejo las correcciones para que pueda realizarlas para el recuperatorio.
+
+CMCristian Marchese - sáb., 1 de nov. de 2025, 20:11
+Corrección 2:
+Aún no está abierto el plazo de recuperación pero como vi tus correcciones te tiro algunas cosas porque si me presentas esto para el recuperatorio no pasará.
+aún tienes require,
+al menos userUsdcBalances ya no tiene multiples accesos, los demás no me fijé aún pero revisa bien uno por uno porque lo haré en el recuperatorio
+Algo que no te voy a corregir pero porque no te lo dije personalmente a ti antes es que deberías tener modifiers validando la lógica, era requisito ya para el tp pasado.
